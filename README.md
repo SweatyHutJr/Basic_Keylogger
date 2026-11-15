@@ -50,10 +50,6 @@ message loop alive so the hook stays installed.
 - No persistence, network exfiltration, or obfuscation is included — it's a *basic*
   keylogger by design.
 
-## License
-
-No license is specified in this repository. All rights reserved by the author unless
-stated otherwise.
 
 ---
 
